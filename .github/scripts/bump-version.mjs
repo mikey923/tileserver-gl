@@ -175,6 +175,51 @@ if (missingEntries.length > 0) {
   }
 }
 
+// A prerelease is a step towards whatever ships next, so its entries belong
+// in the new section. Fold in the prerelease sections directly below it, the
+// way release PRs have been cleaned up by hand until now.
+const sections = rest.split(/^(?=## )/m);
+const parseSection = (text) => {
+  const lines = text.trimEnd().split('\n');
+  const heading = lines.shift();
+  const subsections = new Map();
+  let current = null;
+  for (const line of lines) {
+    if (line.startsWith('### ')) {
+      current = line;
+      if (!subsections.has(current)) subsections.set(current, []);
+    } else if (current && line.trim() !== '') {
+      subsections.get(current).push(line);
+    }
+  }
+  return { heading, subsections };
+};
+const newSection = parseSection(sections[0]);
+while (
+  sections.length > 1 &&
+  sections[1].startsWith('## ') &&
+  sections[1].split('\n')[0].includes('-')
+) {
+  const prerelease = parseSection(sections.splice(1, 1)[0]);
+  console.log(`Folding ${prerelease.heading.slice(3)} into ${newVersion}`);
+  for (const [subsection, entries] of prerelease.subsections) {
+    if (!newSection.subsections.has(subsection))
+      newSection.subsections.set(subsection, []);
+    const target = newSection.subsections.get(subsection);
+    for (const entry of entries) {
+      if (!target.includes(entry)) target.push(entry);
+    }
+  }
+}
+sections[0] = [
+  newSection.heading,
+  ...[...newSection.subsections]
+    .filter(([, entries]) => entries.length > 0)
+    .map(([subsection, entries]) => [subsection, ...entries, ''].join('\n')),
+  '',
+].join('\n');
+rest = sections.join('');
+
 changelog = title + masterSection + rest;
 
 fs.writeFileSync(changelogPath, changelog, 'utf8');
