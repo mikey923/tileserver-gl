@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       min_age_days:
-        description: Only commits on master at least this many days old are released.
+        description: Only commits on master at least this many days old are released, and no release is cut within this many days of the previous stable one.
         required: false
         type: number
         default: 14
@@ -44,6 +44,7 @@ jobs:
       - name: Choose what to release
         id: plan
         env:
+          GH_TOKEN: ${{ github.token }}
           MIN_AGE_DAYS: ${{ inputs.min_age_days }}
         run: |
           minAge="${MIN_AGE_DAYS:-14}"
@@ -55,6 +56,21 @@ jobs:
             echo "::error::No stable v* tag found, nothing to measure from."
             exit 1
           fi
+          echo "Last stable release: $lastStable"
+
+          # Don't cut a release on the heels of the previous one, however it
+          # was cut. The GitHub release says when it went out; fall back to
+          # the tag's commit if there is none.
+          released="$( gh release view "$lastStable" --json publishedAt --jq .publishedAt 2>/dev/null || git log -1 --format=%cI "$lastStable" )"
+          releasedDays=$(( ( $( date +%s ) - $( date -d "$released" +%s ) ) / 86400 ))
+          if [ "$releasedDays" -lt "$minAge" ]; then
+            echo "$lastStable was released $releasedDays days ago, skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The next release must contain everything the last one did, so it
+          # has to be on master, and below, old enough to be in the cut.
           if ! git merge-base --is-ancestor "$lastStable" HEAD; then
             echo "::error::$lastStable has not been merged back into master. Merge its merge-back PR before cutting another release."
             exit 1
@@ -68,7 +84,6 @@ jobs:
             echo "::error::No commit on master is $minAge days old yet."
             exit 1
           fi
-          echo "Last stable release: $lastStable"
           echo "Cut: $( git log -1 --format='%h %cs %s' "$cut" ) (nothing newer than $cutoff)"
 
           range="$lastStable..$cut"
@@ -117,6 +132,12 @@ jobs:
           version="$( printf '%s\n' "$candidate" "$target" | sort -V | tail -1 )"
           if git rev-parse -q --verify "refs/tags/v$version" > /dev/null; then
             echo "::error::v$version already exists."
+            exit 1
+          fi
+          # Whatever the tags say, never go backwards from what npm serves.
+          npmLatest="$( npm view tileserver-gl dist-tags.latest )"
+          if [ "$( printf '%s\n' "$npmLatest" "$version" | sort -V | tail -1 )" != "$version" ] || [ "$npmLatest" = "$version" ]; then
+            echo "::error::v$version would not be newer than $npmLatest, the current latest on npm."
             exit 1
           fi
 
