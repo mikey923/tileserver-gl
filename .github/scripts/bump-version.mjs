@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import * as fs from 'fs';
 
 const versionType = process.argv[2];
@@ -6,14 +6,21 @@ const preid = process.argv[3];
 const changelogPath = 'CHANGELOG.md';
 
 // Build npm version command
-let versionCmd = `npm version --commit-hooks false --git-tag-version false ${versionType}`;
+const versionArgs = [
+  'version',
+  '--commit-hooks',
+  'false',
+  '--git-tag-version',
+  'false',
+  versionType,
+];
 if (preid && preid.trim() !== '') {
-  versionCmd += ` --preid=${preid}`;
+  versionArgs.push(`--preid=${preid}`);
   console.log(`Using preid: ${preid}`);
 }
 
 console.log('Bumping version in root package.json');
-execSync(versionCmd, {
+execFileSync('npm', versionArgs, {
   stdio: 'inherit',
 });
 
@@ -25,15 +32,17 @@ console.log(`New version: ${newVersion}`);
 
 // Update changelog
 console.log(`Checking for changelog at: ${changelogPath}`);
-if (!fs.existsSync(changelogPath)) {
+let changelog;
+try {
+  changelog = fs.readFileSync(changelogPath, 'utf8');
+} catch (error) {
+  if (error.code !== 'ENOENT') throw error;
   console.log(
     `No changelog found at ${changelogPath}, skipping changelog update`,
   );
   fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${newVersion}\n`);
   process.exit(0);
 }
-
-let changelog = fs.readFileSync(changelogPath, 'utf8');
 
 // Get PRs since last tag
 console.log('Fetching PRs since last tagged version...');
